@@ -42,6 +42,12 @@ def scan_dataset(input_dir: Path) -> list:
 
 def _perimeter_param(x: int, y: int, w: int, h: int):
     """Unrolls the rectangle border into a 1D coordinate (0..2*(w+h)), clockwise."""
+<<<<<<< HEAD
+    x = max(0, min(x, w - 1))
+    y = max(0, min(y, h - 1))
+    
+=======
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
     if y == 0:
         return x
     if x == w - 1:
@@ -80,8 +86,13 @@ def _rasterize_border_arc(t_start: float, t_end: float, w: int, h: int):
 
 def extract_mask_from_lines(
     image_bgr: np.ndarray,
+<<<<<<< HEAD
+    lower_hsv = (80, 30, 40),
+    upper_hsv = (175, 255, 255),
+=======
     lower_hsv = (85, 40, 40),  
     upper_hsv = (145, 255, 255),
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
     close_kernel: int = 5,
     min_area: int = 200,
     cluster_gap: int = 5,
@@ -142,7 +153,13 @@ def extract_mask_from_lines(
                 continue
             t0, t1 = touch_ts[i], touch_ts[(i + 1) % len(touch_ts)]
             for (px, py) in _rasterize_border_arc(t0, t1, w, h):
+<<<<<<< HEAD
+                safe_py = max(0, min(py, h - 1))
+                safe_px = max(0, min(px, w - 1))
+                augmented_wall[safe_py, safe_px] = 255
+=======
                 augmented_wall[py, px] = 255
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
 
     n2, labels2 = cv2.connectedComponents(cv2.bitwise_not(augmented_wall), connectivity=4)
     filled = np.zeros((h, w), dtype=np.uint8)
@@ -159,7 +176,11 @@ def extract_mask_from_lines(
     return filled
 
 
+<<<<<<< HEAD
+def find_ambiguous_regions(image_bgr: np.ndarray, lower_hsv=(80, 30, 40), upper_hsv=(175, 255, 255),
+=======
 def find_ambiguous_regions(image_bgr: np.ndarray, lower_hsv=(90, 80, 80), upper_hsv=(140, 255, 255),
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
                            close_kernel: int = 5, min_area: int = 200, cluster_gap: int = 5):
     h, w = image_bgr.shape[:2]
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)

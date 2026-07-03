@@ -1,5 +1,240 @@
 [
   {
+<<<<<<< HEAD
+    "file": "raw_images/2550374-2 10х.JPG",
+    "regions": [
+      {
+        "bbox": [
+          1688,
+          28,
+          2271,
+          666
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/2550375-1 10х.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          0,
+          743,
+          491
+        ],
+        "n_touches": 5
+      },
+      {
+        "bbox": [
+          0,
+          0,
+          2271,
+          1703
+        ],
+        "n_touches": 5
+      }
+    ]
+  },
+  {
+    "file": "raw_images/2550375-3 5х.JPG",
+    "regions": [
+      {
+        "bbox": [
+          1997,
+          575,
+          2271,
+          962
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN3042.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          119,
+          2271,
+          1633
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN3048.JPG",
+    "regions": [
+      {
+        "bbox": [
+          2023,
+          0,
+          2271,
+          327
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN3052.JPG",
+    "regions": [
+      {
+        "bbox": [
+          358,
+          0,
+          1030,
+          622
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4695.JPG",
+    "regions": [
+      {
+        "bbox": [
+          1346,
+          0,
+          1721,
+          559
+        ],
+        "n_touches": 1
+      },
+      {
+        "bbox": [
+          1467,
+          1629,
+          1691,
+          1703
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4718.JPG",
+    "regions": [
+      {
+        "bbox": [
+          1984,
+          0,
+          2227,
+          167
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4719.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          0,
+          1449,
+          1408
+        ],
+        "n_touches": 5
+      },
+      {
+        "bbox": [
+          1500,
+          1314,
+          2271,
+          1703
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4721.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          1220,
+          313,
+          1674
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4727.JPG",
+    "regions": [
+      {
+        "bbox": [
+          442,
+          0,
+          1769,
+          1046
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4734.JPG",
+    "regions": [
+      {
+        "bbox": [
+          465,
+          0,
+          1219,
+          447
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN4754.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          0,
+          1063,
+          1703
+        ],
+        "n_touches": 3
+      }
+    ]
+  },
+  {
+    "file": "raw_images/DSCN5185.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          0,
+          1261,
+          469
+        ],
+        "n_touches": 3
+      },
+      {
+        "bbox": [
+          436,
+          1108,
+          1221,
+          1703
+        ],
+        "n_touches": 1
+      }
+    ]
+  },
+  {
+=======
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
     "file": "raw_images/ore.JPG",
     "regions": [
       {
