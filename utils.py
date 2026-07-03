@@ -1,5 +1,6 @@
 import cv2
 import numpy
+import os
 # Подготовка изображеняи цветокорекция clahe возваращает три копии в разных цвет пространствах
 def preprocess_image(image_path:str):
 
@@ -27,40 +28,39 @@ def preprocess_image(image_path:str):
 
 
 def create_binary_mask(image_hsv):
-    # Выделяет синие контуры разметки из HSV-изображения, создавая маску зерен.
-
-
-    # 1. Задаем границы синего цвета в пространстве OpenCV HSV
-    # H (Тон) для синего: ~100-140 (из 180)
-    # S (Насыщенность) и V (Яркость): отсекаем слишком блеклые или темные тона
+    # 1. Выделяем синие маркеры
     lower_blue = numpy.array([100, 50, 50])
     upper_blue = numpy.array([140, 255, 255])
-
-    # 2. Создаем первичную маску синих линий
     mask_blue_lines = cv2.inRange(image_hsv, lower_blue, upper_blue)
 
-    # 3. Заполнение внутри синих линий
+    # 2. Закрываем мелкие разрывы в линиях маркера
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     mask_closed = cv2.morphologyEx(mask_blue_lines, cv2.MORPH_CLOSE, kernel, iterations=2)
-    # MORPH_CLOSE сначала расширяет белые зоны, соединяя разрывы, а потом сужает обратно
-    mask_closed = cv2.morphologyEx(mask_blue_lines, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # 4. Поиск контуров
-    # cv2.RETR_EXTERNAL — ищем только самые внешние контуры (игнорируем вложенные дырки)
-    # cv2.CHAIN_APPROX_SIMPLE — сжимает горизонтальные, вертикальные и диагональные сегменты
-    contours, _ = cv2.findContours(mask_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 3. Инвертируем маску: линии станут черными, а пустоты (фон и области талька) - белыми
+    inv_mask = cv2.bitwise_not(mask_closed)
 
-    # 5.Создание черной маски
-    filled_mask = numpy.zeros_like(mask_closed)
+    # 4. Находим все эти разделенные белые области
+    contours, _ = cv2.findContours(inv_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 6. Заливаем найденные контуры изнутри
-    # -1 — означает «отрисовать ВСЕ найденные контуры»
-    # 255 — цвет заливки (белый)
-    # thickness=cv2.FILLED — ключевой флаг, который приказывает залить контур полностью, а не просто обвести
-    cv2.drawContours(filled_mask, contours, -1, 255, thickness=cv2.FILLED)
+    final_binary = mask_closed.copy()
 
-    return filled_mask
+    if contours:
+        # Находим индекс самой большой области (предполагаем, что это внешний фон)
+        largest_idx = -1
+        max_area = -1
+        for i, contour in enumerate(contours):
+            area = cv2.contourArea(contour)
+            if area > max_area:
+                max_area = area
+                largest_idx = i
 
+        # 5. Заливаем белым цветом все области, кроме фона
+        for i, contour in enumerate(contours):
+            if i != largest_idx:
+                cv2.drawContours(final_binary, [contour], -1, 255, thickness=-1)
+
+    return final_binary
 def classify_ore_segments(filled_mask, image_enhanced_gray, brightness_threshold=120, talc_threshold=30):
     """
         Разделяет бинарную маску на 4 класса на основе яркости и текстуры в Grayscale.
@@ -111,42 +111,42 @@ def classify_ore_segments(filled_mask, image_enhanced_gray, brightness_threshold
 
     return final_mask
 
-    def slicer(image_path, output_dir):
 
-        # 1. Укажите путь к вашей картинке с синими контурами
-        image_path = image_path
-        image = cv2.imread(image_path)
+def slicer(image_path, output_dir):
+    # 1. Укажите путь к вашей картинке с синими контурами
+    image_path = image_path
+    image = cv2.imread(image_path)
 
-        # Выходная папка
-        output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+    # Выходная папка
+    output_dir = output_dir
+    os.makedirs(output_dir, exist_ok=True)
 
-        if image is None:
-            print("Ошибка: Картинка не найдена!")
-        else:
-            # Высота и ширина картинки
-            height, width, _ = image.shape
+    if image is None:
+        print("Ошибка: Картинка не найдена!")
+    else:
+        # Высота и ширина картинки
+        height, width, _ = image.shape
 
-            # Размер одного слайса
-            tile_size = 512
+        # Размер одного слайса
+        tile_size = 512
 
-            # Колво файлов
-            count = 0
+        # Колво файлов
+        count = 0
 
-            # Задаем список кординат по верт заранее чтобы избежать выхода за границу
-            y_cords = list(range(0, height, tile_size))
-            if y_cords[-1] + tile_size > height:
-                y_cords[-1] = height - tile_size
+        # Задаем список кординат по верт заранее чтобы избежать выхода за границу
+        y_cords = list(range(0, height, tile_size))
+        if y_cords[-1] + tile_size > height:
+            y_cords[-1] = height - tile_size
 
-            # Задаем список кординат по гориз заранее чтобы избежать выхода за границу
-            x_cords = list(range(0, width, tile_size))
-            if x_cords[-1] + tile_size > width:
-                x_cords[-1] = width - tile_size
+        # Задаем список кординат по гориз заранее чтобы избежать выхода за границу
+        x_cords = list(range(0, width, tile_size))
+        if x_cords[-1] + tile_size > width:
+            x_cords[-1] = width - tile_size
 
-            for y in y_cords:
-                for x in x_cords:
-                    # 2. Вырезаем кусочек: от 0 до 512 пикселей по высоте и по ширине
-                    crop = image[y:y + tile_size, x:x + tile_size]
-                    # 3. Сохраняем этот кусочек рядом с кодом
-                    cv2.imwrite(f"{output_dir}/crop_{count}.jpg", crop)
-                    count += 1
+        for y in y_cords:
+            for x in x_cords:
+                # 2. Вырезаем кусочек: от 0 до 512 пикселей по высоте и по ширине
+                crop = image[y:y + tile_size, x:x + tile_size]
+                # 3. Сохраняем этот кусочек рядом с кодом
+                cv2.imwrite(f"{output_dir}/crop_{count}.jpg", crop)
+                count += 1
