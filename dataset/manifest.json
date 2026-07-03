@@ -1,0 +1,11 @@
+[
+  {
+    "split": "train",
+    "source": "ore",
+    "image": "train/images/ore.png",
+    "mask": "train/masks/ore.png",
+    "height": 878,
+    "width": 1171,
+    "fg_ratio": 0.144
+  }
+]
