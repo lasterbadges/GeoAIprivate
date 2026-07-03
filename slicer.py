@@ -1,5 +1,3 @@
-from turtledemo.penrose import start
-
 import cv2
 import os
 
