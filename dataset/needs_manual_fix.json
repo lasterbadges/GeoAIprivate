@@ -1,0 +1,16 @@
+[
+  {
+    "file": "raw_images/ore.JPG",
+    "regions": [
+      {
+        "bbox": [
+          0,
+          0,
+          1170,
+          877
+        ],
+        "n_touches": 5
+      }
+    ]
+  }
+]
