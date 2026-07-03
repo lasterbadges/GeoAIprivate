@@ -1,5 +1,6 @@
 [
   {
+<<<<<<< HEAD
     "file": "raw_images/2550374-2 10х.JPG",
     "regions": [
       {
@@ -232,6 +233,8 @@
     ]
   },
   {
+=======
+>>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
     "file": "raw_images/ore.JPG",
     "regions": [
       {
