@@ -71,7 +71,7 @@ def main():
     criterion = smp.losses.DiceLoss(mode="binary")
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
-    epochs = 2
+    epochs = 15
     model.train()
     
     for epoch in range(1, epochs + 1):

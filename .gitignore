@@ -8,6 +8,8 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+/Задача 3. Скажи мне, кто твой шлиф
+/data
 build/
 develop-eggs/
 dist/

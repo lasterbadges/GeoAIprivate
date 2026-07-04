@@ -4,7 +4,7 @@ import random
 import cv2
 import numpy
 
-from utils import preprocess_image, create_binary_mask, classify_ore_segments
+from utils import PreProcessingMethods
 
 INPUT_DIR = "InputDir"
 OUTPUT_DIR = "OutputDir"
@@ -37,12 +37,13 @@ random.shuffle(image_paths)
 #}
 
 count = 0
+pre_pr = PreProcessingMethods()
 
 for img_path in image_paths:
 
-    image_bgr, image_enhanced_gray, image_hsv = preprocess_image(img_path)
-    filled_mask = create_binary_mask(image_hsv)
-    final_mask = classify_ore_segments(filled_mask, image_enhanced_gray)
+    image_bgr, image_enhanced_gray, image_hsv = pre_pr.preprocess_image(img_path)
+    filled_mask = pre_pr.create_binary_mask(image_hsv)
+    final_mask = pre_pr.classify_ore_segments(filled_mask, image_enhanced_gray)
 
     height, width, _ = image_bgr.shape
 

@@ -1,7 +1,6 @@
 [
   {
     "split": "train",
-<<<<<<< HEAD
     "source": "2550374-2 10х",
     "image": "train/images/2550374-2 10х.png",
     "mask": "train/masks/2550374-2 10х.png",
@@ -383,11 +382,6 @@
     "source": "ore",
     "image": "val/images/ore.png",
     "mask": "val/masks/ore.png",
-=======
-    "source": "ore",
-    "image": "train/images/ore.png",
-    "mask": "train/masks/ore.png",
->>>>>>> ef28a06e6c5b5e0f2e8ea0b33cc5d35562478569
     "height": 878,
     "width": 1171,
     "fg_ratio": 0.144
