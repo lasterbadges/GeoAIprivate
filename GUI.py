@@ -36,7 +36,21 @@ if "logged_out" not in st.session_state:
 # Инициализация процессора
 pre_pr = PreProcessingMethods()
 
-MODEL_PATH = "models/model_boxed.pth"
+def resolve_talc_model_path():
+    candidates = [
+        Path("models/talc_finetuned.pth"),
+        Path("models/model_boxed.pth"),
+        Path("models/test_unet_finetuned.pth"),
+        Path("models/test_unet.pth"),
+    ]
+    candidates.extend(sorted(Path("models").glob("test_unet_finetuned_epoch*.pth"), reverse=True))
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return "models/test_unet_finetuned.pth"
+
+
+MODEL_PATH = resolve_talc_model_path()
 RESNET_MODEL_PATH = "models/ore_resnet18.pth"
 TEXTURE_MODEL_PATH = str(TEXTURE_CLASSIFIER_PATH)
 FEEDBACK_CSV = "data/geologist_feedback.csv"
@@ -422,15 +436,12 @@ def analyze_single_image(img_path, brightness_thresh, talc_thresh, use_unet, use
     resnet_regular_probability = ordinary_pct
     resnet_complex_probability = fine_pct
 
-    if sulfide_pixels > 0:
-        texture_weight = 0.6 if texture_result is not None else 0.0
-        resnet_weight = 1.0 - texture_weight
-        ensemble_regular_probability = (
-            regular_probability * texture_weight
-            + resnet_regular_probability * resnet_weight
-        )
+    if texture_result is not None:
+        texture_weight = 0.88
+        resnet_weight = 0.12 if sulfide_pixels > 0 else 0.0
+        ensemble_regular_probability = regular_probability * texture_weight + resnet_regular_probability * resnet_weight
     else:
-        ensemble_regular_probability = regular_probability
+        ensemble_regular_probability = resnet_regular_probability if sulfide_pixels > 0 else regular_probability
 
     ensemble_complex_probability = 100.0 - ensemble_regular_probability
     ensemble_class = "Рядовая" if ensemble_regular_probability >= 50.0 else "Труднообогатимая"
