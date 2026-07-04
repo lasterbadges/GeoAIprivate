@@ -1,6 +1,6 @@
 .git
-.gitignore
+.venv
+ResNetUNet-dataset/
+OutputDir/
 __pycache__/
-*.pth
-*.onnx
 .env
