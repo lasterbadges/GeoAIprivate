@@ -7,13 +7,87 @@ class PreProcessingMethods:
         self.unet_model = None
         self.resnet_model = None
 
+    def normalize_for_inference(self, image_bgr):
+        """
+        Нормализует изображение перед подачей в нейросети:
+        - ч/б (1-канальный / однотонный BGR) -> полноцветный RGB-эквивалент
+        - выравнивание экспозиции через CLAHE в LAB
+        - гамма-коррекция под среднюю яркость
+        - адаптивный white-balance
+        Возвращает BGR uint8 того же размера, пригодный для нейросетей.
+        """
+        img = image_bgr.copy()
+
+        # определяем, является ли изображение фактически ч/б:
+        # если std по каналам < 5 — все каналы почти одинаковые
+        if img.ndim == 3:
+            ch_std = numpy.std(img.reshape(-1, 3).astype(numpy.float32), axis=0)
+            is_grayscale = bool(numpy.max(ch_std) < 8)
+        else:
+            is_grayscale = True
+
+        if is_grayscale:
+            # конвертируем в серый, затем обратно в псевдо-RGB
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            # CLAHE на сером
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            gray_eq = clahe.apply(gray)
+            img = cv2.cvtColor(gray_eq, cv2.COLOR_GRAY2BGR)
+        else:
+            # цветное изображение: выравниваем экспозицию в LAB-пространстве
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_ch = clahe.apply(l_ch)
+            img = cv2.cvtColor(cv2.merge([l_ch, a_ch, b_ch]), cv2.COLOR_LAB2BGR)
+
+            # простой серого мира white balance
+            b_m, g_m, r_m = [numpy.mean(img[:, :, i]) + 1e-6 for i in range(3)]
+            gray_mean = (b_m + g_m + r_m) / 3.0
+            img = numpy.clip(
+                img.astype(numpy.float32) * [gray_mean / b_m, gray_mean / g_m, gray_mean / r_m],
+                0, 255
+            ).astype(numpy.uint8)
+
+        # гамма-коррекция: подтягиваем темные снимки
+        mean_lum = numpy.mean(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+        if mean_lum < 80:
+            gamma = 0.6  # осветляем
+        elif mean_lum > 200:
+            gamma = 1.5  # притемняем
+        else:
+            gamma = 1.0
+
+        if gamma != 1.0:
+            lut = numpy.array([min(255, int(((i / 255.0) ** gamma) * 255)) for i in range(256)], dtype=numpy.uint8)
+            img = cv2.LUT(img, lut)
+
+        return img
+
     # Подготовка изображеняи цветокорекция clahe возваращает три копии в разных цвет пространствах
-    def preprocess_image(self, image_path):
+    def _ensure_color(self, image_bgr):
+        """если снимок фактически ч/б — разворачиваем gray→BGR без изменения пикселей."""
+        if image_bgr.ndim == 3:
+            ch_std = numpy.std(image_bgr.reshape(-1, 3).astype(numpy.float32), axis=0)
+            if numpy.max(ch_std) < 8:  # все каналы почти одинаковые → ч/б
+                gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+                return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return image_bgr
+
+    def preprocess_image(self, image_path, max_side=3200):
         # 1. Загрузка изображения в формате BGR
         image_array = numpy.fromfile(str(image_path), dtype=numpy.uint8)
         image_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
         if image_bgr is None:
             raise FileNotFoundError(f"Не удалось загрузить изображение по пути: {image_path}")
+
+        # 1.5. Автоматический быстрый ресайз для больших панорам
+        h, w = image_bgr.shape[:2]
+        if max(h, w) > max_side:
+            scale = max_side / float(max(h, w))
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            image_bgr = cv2.resize(image_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         # 2. Перевод в оттенки серого
         image_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
@@ -48,17 +122,77 @@ class PreProcessingMethods:
         Используется для необработанных (тестовых) изображений без синих линий разметки.
         """
         # Применяем порог Otsu
-        _, thresh = cv2.threshold(image_enhanced_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        gray = cv2.medianBlur(image_enhanced_gray, 3)
+        otsu_value, otsu_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        p50, p82, p90, p97 = numpy.percentile(gray, [50, 82, 90, 97])
+        contrast = p97 - p50
+
+        if contrast < 35:
+            bright_threshold = max(65, min(float(p82), float(otsu_value)))
+        else:
+            bright_threshold = max(95, min(float(p90), max(float(otsu_value), 115.0)))
+
+        percentile_mask = (gray >= bright_threshold).astype(numpy.uint8) * 255
+        min_side = min(gray.shape[:2])
+        adaptive_block = min(151, max(31, (min_side // 18) | 1))
+        if adaptive_block >= min_side:
+            adaptive_block = max(3, min_side - 1)
+            if adaptive_block % 2 == 0:
+                adaptive_block -= 1
+        adaptive_mask = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            adaptive_block,
+            -3
+        )
+        thresh = cv2.bitwise_or(otsu_mask, percentile_mask)
+        if contrast < 55:
+            thresh = cv2.bitwise_or(thresh, adaptive_mask)
         
         # Руда/сульфиды должны быть яркими. Отсекаем темную нерудную матрицу.
         # Обычно сульфиды после CLAHE ярче 100-110.
-        thresh[image_enhanced_gray < 110] = 0
+        thresh[gray < 55] = 0
         
         # Убираем мелкие шумы
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        mask_opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-        
-        return mask_opened
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask_opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_small, iterations=1)
+
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+        mask_closed = cv2.dilate(mask_closed, kernel_small, iterations=1)
+        mask_closed = self.fill_mask_holes(mask_closed, max_hole_area=30000)
+
+        filled = numpy.zeros_like(mask_closed)
+        contours, _ = cv2.findContours(mask_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            if cv2.contourArea(contour) >= 80:
+                cv2.drawContours(filled, [contour], -1, 255, thickness=cv2.FILLED)
+
+        return self.fill_mask_holes(filled, max_hole_area=50000)
+
+    def remove_small_components(self, mask, min_area=250):
+        mask_u8 = (mask > 0).astype(numpy.uint8)
+        labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, 8)
+        filtered = numpy.zeros_like(mask_u8, dtype=numpy.uint8)
+        for label_id in range(1, labels_count):
+            if stats[label_id, cv2.CC_STAT_AREA] >= min_area:
+                filtered[labels == label_id] = 255
+        return filtered
+
+    def fill_mask_holes(self, mask, max_hole_area=20000):
+        mask_u8 = (mask > 0).astype(numpy.uint8) * 255
+        inv = cv2.bitwise_not(mask_u8)
+        labels_count, labels, stats, _ = cv2.connectedComponentsWithStats((inv > 0).astype(numpy.uint8), 8)
+        filled = mask_u8.copy()
+        h, w = mask_u8.shape[:2]
+        for label_id in range(1, labels_count):
+            x, y, bw, bh, area = stats[label_id]
+            touches_border = x == 0 or y == 0 or x + bw >= w or y + bh >= h
+            if not touches_border and area <= max_hole_area:
+                filled[labels == label_id] = 255
+        return filled
 
     def segment_talc_unet(self, image_bgr, model_path="models/test_unet.pth", device=None):
         """
@@ -92,7 +226,9 @@ class PreProcessingMethods:
         from preprocessing.tiling import slice_into_tiles, stitch_tiles
 
         # 2. Нарезка на тайлы
-        # Нарезаем исходное изображение на тайлы 512x512 с перекрытием 64
+        # Используем порог 0.94 для уверенной детекции талька без шумов
+        unet_thresh = 0.94
+
         tiles, coords = slice_into_tiles(image_bgr, tile_size=512, overlap=64)
 
         pred_tiles = []
@@ -111,7 +247,7 @@ class PreProcessingMethods:
                 probs = torch.sigmoid(logits).cpu().numpy()[0, 0] # [256, 256]
                 
                 # Порог бинаризации
-                pred_tile_resized = (probs > 0.5).astype(numpy.uint8) * 255
+                pred_tile_resized = (probs > unet_thresh).astype(numpy.uint8) * 255
                 
                 # Ресайзим обратно к 512x512
                 pred_tile = cv2.resize(pred_tile_resized, (512, 512), interpolation=cv2.INTER_NEAREST)
@@ -119,7 +255,10 @@ class PreProcessingMethods:
 
         # 3. Сшиваем тайлы обратно
         stitched_mask = stitch_tiles(pred_tiles, coords, image_bgr.shape[:2], tile_size=512)
-        return stitched_mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        stitched_mask = cv2.morphologyEx(stitched_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        stitched_mask = cv2.morphologyEx(stitched_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        return self.remove_small_components(stitched_mask, min_area=350)
 
     def classify_sulfides_resnet(self, image_bgr, sulfide_mask, device=None, model_path="models/ore_resnet18.pth"):
         """
@@ -231,33 +370,33 @@ class PreProcessingMethods:
         """
         # 1. Проверяем, является ли filled_mask маской разметки (синие линии)
         # Если filled_mask пустая (или почти пустая, менее 1000 пикселей), мы автоматически сегментируем сульфиды
-        if numpy.sum(filled_mask > 0) < 1000:
-            sulfide_mask = self.segment_sulfides(image_enhanced_gray)
-        else:
-            sulfide_mask = filled_mask
+        talc_hint_mask = filled_mask > 0 if numpy.sum(filled_mask > 0) >= 1000 else None
+        sulfide_mask = self.segment_sulfides(image_enhanced_gray)
 
         # 2. Инициализируем итоговую многоклассовую маску
         final_mask = numpy.zeros_like(sulfide_mask, dtype=numpy.uint8)
 
+        # Определяем, является ли изображение фактически ч/б (проходящий свет) или цветным (отраженный)
         # 3. Сегментируем Тальк (Класс 3)
         talc_mask = None
-        # Попробуем запустить U-Net
         if use_unet and image_bgr is not None and os.path.exists(model_path):
             try:
                 talc_mask = self.segment_talc_unet(image_bgr, model_path, device)
             except Exception as e:
-                # Если упало (например, GPU OOM или проблемы с торчем), используем фолбек
                 pass
 
         if talc_mask is None:
-            # Классический фолбек по яркости: темные зоны в нерудной матрице
+            # Классический фолбек по яркости
             talc_mask = (sulfide_mask == 0) & (image_enhanced_gray < talc_threshold)
         else:
-            # Приводим к булевой маске
-            talc_mask = talc_mask > 127
+            # U-Net маска, строго ограниченная темной нерудной матрицей (яркость < 97)
+            talc_mask = (talc_mask > 127) & (sulfide_mask == 0) & (image_enhanced_gray < 97)
 
-        # Записываем тальк (Класс 3)
-        final_mask[talc_mask] = 3
+        if talc_hint_mask is not None:
+            talc_mask = talc_mask & talc_hint_mask
+
+        talc_mask = self.remove_small_components(talc_mask.astype(numpy.uint8) * 255, min_area=350)
+        talc_mask = self.fill_mask_holes(talc_mask, max_hole_area=8000) > 0
 
         # 4. Классифицируем сульфиды на обычные (Класс 1) и тонкие (Класс 2)
         resnet_success = False
@@ -265,8 +404,8 @@ class PreProcessingMethods:
             try:
                 resnet_mask = self.classify_sulfides_resnet(image_bgr, sulfide_mask, device, resnet_model_path)
                 # Переносим классификацию сульфидов, исключая зоны талька
-                final_mask[(resnet_mask == 1) & (final_mask != 3)] = 1
-                final_mask[(resnet_mask == 2) & (final_mask != 3)] = 2
+                final_mask[resnet_mask == 1] = 1
+                final_mask[resnet_mask == 2] = 2
                 resnet_success = True
             except Exception as e:
                 # В случае ошибки падаем на классический пороговый метод
@@ -294,7 +433,9 @@ class PreProcessingMethods:
                 val = 1 if mean_brightness >= brightness_threshold else 2
 
                 final_mask_crop = final_mask[y_c:y_c+h_c, x_c:x_c+w_c]
-                final_mask_crop[(local_mask == 255) & (final_mask_crop != 3)] = val
+                final_mask_crop[local_mask == 255] = val
+
+        final_mask[(talc_mask) & (final_mask == 0)] = 3
 
         return final_mask
 
