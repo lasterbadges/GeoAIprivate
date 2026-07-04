@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import cv2
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 import os
 import time
 from pathlib import Path
@@ -35,8 +36,7 @@ if "logged_out" not in st.session_state:
 # Инициализация процессора
 pre_pr = PreProcessingMethods()
 
-# Путь к U-Net весам талька
-MODEL_PATH = "models/test_unet.pth"
+MODEL_PATH = "models/model_boxed.pth"
 RESNET_MODEL_PATH = "models/ore_resnet18.pth"
 TEXTURE_MODEL_PATH = str(TEXTURE_CLASSIFIER_PATH)
 FEEDBACK_CSV = "data/geologist_feedback.csv"
@@ -44,7 +44,7 @@ ACTIVE_LEARNING_DIR = "data/active_learning"
 HISTORY_CSV = "data/analysis_history.csv"
 MAX_BATCH_PREVIEWS = 12
 BATCH_INPUT_PREVIEW_SIDE = 420
-BATCH_RESULT_PREVIEW_SIDE = 760
+BATCH_RESULT_PREVIEW_SIDE = 1200
 
 # CSS стили для красивого дашборда
 CSS_STYLE = """
@@ -389,6 +389,7 @@ def analyze_single_image(img_path, brightness_thresh, talc_thresh, use_unet, use
     
     talc_pct = round(float(talc_pixels / total_pixels) * 100.0, 2)
     sulfide_pct = round(float(sulfide_pixels / total_pixels) * 100.0, 2)
+    talc_present = talc_pixels > 0
     
     if sulfide_pixels > 0:
         ordinary_pct = round(float(ordinary_pixels / sulfide_pixels) * 100.0, 1)
@@ -404,7 +405,7 @@ def analyze_single_image(img_path, brightness_thresh, talc_thresh, use_unet, use
     complex_probability = 0.0
     texture_tile_count = 0
     try:
-        texture_result = predict_ore_texture(image_bgr, TEXTURE_MODEL_PATH)
+        texture_result = predict_ore_texture(img_path, TEXTURE_MODEL_PATH, max_tiles=20)
         texture_class = texture_result["class"]
         texture_confidence = texture_result["confidence"]
         regular_probability = texture_result["regular_probability"]
@@ -461,6 +462,7 @@ def analyze_single_image(img_path, brightness_thresh, talc_thresh, use_unet, use
     
     return {
         "class": ore_class,
+        "talc_present": talc_present,
         "talc_pct": talc_pct,
         "sulfide_pct": sulfide_pct,
         "ordinary_pct": ordinary_pct,
@@ -517,6 +519,7 @@ def save_analysis_to_history(filename, res):
         "Timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Filename": filename,
         "Class": res["class"],
+        "TalcPresent": res.get("talc_present", False),
         "TalcPercent": res["talc_pct"],
         "SulfidePercent": res["sulfide_pct"],
         "OrdinaryPercent": res["ordinary_pct"],
@@ -706,7 +709,7 @@ with tab1:
             <div class="metric-glass-card">
                 <div class="metric-label">Доля талька</div>
                 <div class="metric-value">{res['talc_pct']}%</div>
-                <div class="metric-sublabel">Порог: 10.0%</div>
+                <div class="metric-sublabel">Наличие: {'да' if res['talc_present'] else 'нет'} · Порог: 10.0%</div>
             </div>
             <div class="metric-glass-card">
                 <div class="metric-label">Общие сульфиды</div>
@@ -734,9 +737,11 @@ with tab1:
         # таблица
         df_metrics = pd.DataFrame({
             "Параметр": ["Сорт руды", "Доля талька", "Общая доля сульфидов",
-                         "Текстурный сорт", "Уверенность классификатора"],
+                         "ResNet по маске", "Texture classifier", "Итог ансамбля"],
             "Значение": [res["class"].upper(), f"{res['talc_pct']}%", f"{res['sulfide_pct']}%",
-                         res["texture_class"].upper(), f"{res['texture_confidence']}%"]
+                         f"{res['resnet_class'].upper()} · {res['resnet_confidence']}%",
+                         f"{res['texture_class'].upper()} · {res['texture_confidence']}%",
+                         f"{res['ensemble_class'].upper()} · {res['ensemble_confidence']}%"]
         })
         st.dataframe(df_metrics, use_container_width=True, hide_index=True)
 
@@ -745,8 +750,9 @@ with tab1:
             f"Сорт руды: {res['class'].upper()}\n"
             f"Тальк: {res['talc_pct']}%\n"
             f"Сульфиды: {res['sulfide_pct']}%\n"
-            f"Текстурный сорт: {res['texture_class'].upper()}\n"
-            f"Уверенность классификатора: {res['texture_confidence']}%\n"
+            f"ResNet по маске: {res['resnet_class'].upper()} ({res['resnet_confidence']}%)\n"
+            f"Texture classifier: {res['texture_class'].upper()} ({res['texture_confidence']}%)\n"
+            f"Итог ансамбля: {res['ensemble_class'].upper()} ({res['ensemble_confidence']}%)\n"
         )
         st.download_button(
             "📥 Скачать текстовый отчет",
@@ -830,17 +836,17 @@ with tab2:
                     "name": _f.name,
                     "class": res["class"],
                     "talc_pct": res["talc_pct"],
-                    "texture_confidence": res["texture_confidence"],
+                    "ensemble_confidence": res["ensemble_confidence"],
                     "original": original_preview,
                     "mask": mask_preview,
                 })
             results.append({
                 "Имя файла": _f.name,
                 "Рекомендуемый сорт": res["class"].upper(),
+                "Тальк найден": "да" if res["talc_present"] else "нет",
                 "Тальк (%)": res["talc_pct"],
                 "Сульфиды (%)": res["sulfide_pct"],
-                "Текстурный сорт": res["texture_class"].upper(),
-                "Уверенность (%)": res["texture_confidence"]
+                "Общая уверенность (%)": res["ensemble_confidence"]
             })
             del res
             progress_bar.progress((idx + 1) / len(batch_files))
@@ -855,7 +861,7 @@ with tab2:
                 with st.container():
                     st.markdown(
                         f"**{item['name']}**  \n"
-                        f"{item['class'].upper()} · тальк {item['talc_pct']}% · уверенность {item['texture_confidence']}%"
+                        f"{item['class'].upper()} · тальк {item['talc_pct']}% · ансамбль {item['ensemble_confidence']}%"
                     )
                     render_before_after(item["original"], item["mask"], 0.42, max_side=BATCH_RESULT_PREVIEW_SIDE)
 
@@ -1000,55 +1006,19 @@ with tab3:
             )
             st.plotly_chart(fig_hist, use_container_width=True)
 
-        # Динамика по времени (содержание талька)
-        if total >= 3:
-            df_hist["Timestamp"] = pd.to_datetime(df_hist["Timestamp"])
-            df_hist_sorted = df_hist.sort_values("Timestamp")
-
-            fig_line = go.Figure()
-            fig_line.add_trace(go.Scatter(
-                x=df_hist_sorted["Timestamp"],
-                y=df_hist_sorted["TalcPercent"],
-                mode='lines+markers',
-                name='Тальк %',
-                line=dict(color='#6366f1', width=2),
-                marker=dict(size=6),
-                fill='tozeroy',
-                fillcolor='rgba(99,102,241,0.1)'
-            ))
-            fig_line.add_trace(go.Scatter(
-                x=df_hist_sorted["Timestamp"],
-                y=df_hist_sorted["SulfidePercent"],
-                mode='lines+markers',
-                name='Сульфиды %',
-                line=dict(color='#10b981', width=2),
-                marker=dict(size=6),
-                fill='tozeroy',
-                fillcolor='rgba(16,185,129,0.1)'
-            ))
-            # Пороговая линия талька
-            fig_line.add_hline(
-                y=10.0, line_dash="dot",
-                line_color="#ef4444",
-                annotation_text="Порог талька 10%",
-                annotation_position="bottom right",
-                annotation_font_color="#ef4444"
-            )
-            fig_line.update_layout(
-                title="Динамика минерального состава по времени",
-                paper_bgcolor='rgba(15,23,42,0.6)',
-                plot_bgcolor='rgba(15,23,42,0.3)',
-                font=dict(color='#cbd5e1', family='Inter'),
-                title_font=dict(size=15, color='#f3f4f6'),
-                xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
-                yaxis=dict(title="Содержание (%)", gridcolor='rgba(255,255,255,0.05)'),
-                legend=dict(bgcolor='rgba(0,0,0,0)', font=dict(color='#cbd5e1')),
-                margin=dict(t=50, b=40, l=40, r=10)
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
+        mineral_summary = pd.DataFrame({
+            "Показатель": ["Средний тальк", "Макс. тальк", "Средние сульфиды", "Макс. сульфиды"],
+            "Значение": [
+                f"{round(df_hist['TalcPercent'].mean(), 2)}%",
+                f"{round(df_hist['TalcPercent'].max(), 2)}%",
+                f"{round(df_hist['SulfidePercent'].mean(), 2)}%",
+                f"{round(df_hist['SulfidePercent'].max(), 2)}%",
+            ]
+        })
+        st.dataframe(mineral_summary, use_container_width=True, hide_index=True)
 
         # Таблица последних 10 шлифов
-        st.markdown("<h4 style='color:#f3f4f6; margin-top:10px;'>🕐 Последние 10 обработанных шлифов</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:#f3f4f6; margin-top:10px;'>Последние 10 шлифов</h4>", unsafe_allow_html=True)
         st.dataframe(
             df_hist.tail(10)[["Timestamp", "Filename", "Class", "TalcPercent", "SulfidePercent", "OrdinaryPercent", "FinePercent"]].iloc[::-1].rename(columns={
                 "Timestamp": "Время", "Filename": "Файл", "Class": "Сорт",

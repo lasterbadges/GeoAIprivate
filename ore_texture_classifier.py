@@ -13,6 +13,7 @@ CLASS_NAMES = {
     0: "Труднообогатимая",
     1: "Рядовая",
 }
+_MODEL_CACHE = {}
 
 
 def read_bgr(path: str | Path) -> np.ndarray:
@@ -68,7 +69,7 @@ def make_inference_tiles(
     crop_size: int = 448,
     max_tiles: int = 36,
 ) -> list[np.ndarray]:
-    image_bgr = normalize_bgr(image_bgr)
+    # Нарезаем тайлы из оригинального ненормализованного BGR (переводим его в RGB)
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     h, w = image_rgb.shape[:2]
 
@@ -122,6 +123,27 @@ def _load_checkpoint(model_path: str | Path, device):
     return model, 0.5, 224
 
 
+def _get_cached_model(model_path: Path, device):
+    from torchvision import transforms
+
+    cache_key = (str(model_path.resolve()), str(device))
+    cached = _MODEL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    model, threshold, image_size = _load_checkpoint(model_path, device)
+    model = model.to(device).eval()
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    cached = (model, threshold, image_size, transform)
+    _MODEL_CACHE[cache_key] = cached
+    return cached
+
+
 def predict_ore_texture(
     image_bgr_or_path: np.ndarray | str | Path,
     model_path: str | Path = TEXTURE_CLASSIFIER_PATH,
@@ -129,7 +151,6 @@ def predict_ore_texture(
     max_tiles: int = 36,
 ) -> dict:
     import torch
-    from torchvision import transforms
 
     model_path = Path(model_path)
     if not model_path.exists():
@@ -139,29 +160,29 @@ def predict_ore_texture(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     image_bgr = read_bgr(image_bgr_or_path) if isinstance(image_bgr_or_path, (str, Path)) else image_bgr_or_path
-    model, threshold, image_size = _load_checkpoint(model_path, device)
-    model = model.to(device).eval()
-
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    model, threshold, image_size, transform = _get_cached_model(model_path, device)
 
     tiles = make_inference_tiles(image_bgr, max_tiles=max_tiles)
     if not tiles:
         raise ValueError("Не удалось получить тайлы для классификации")
 
+    # Нормализуем каждый выбранный тайл 448x448 по отдельности (это экономит гигабайты ОЗУ)
+    normalized_tiles = []
+    for tile_rgb in tiles:
+        tile_bgr = cv2.cvtColor(tile_rgb, cv2.COLOR_RGB2BGR)
+        norm_tile_bgr = normalize_bgr(tile_bgr)
+        norm_tile_rgb = cv2.cvtColor(norm_tile_bgr, cv2.COLOR_BGR2RGB)
+        normalized_tiles.append(norm_tile_rgb)
+
     probs: list[float] = []
     with torch.no_grad():
-        for start in range(0, len(tiles), 32):
-            batch = torch.stack([transform(tile) for tile in tiles[start:start + 32]]).to(device)
+        for start in range(0, len(normalized_tiles), 32):
+            batch = torch.stack([transform(tile) for tile in normalized_tiles[start:start + 32]]).to(device)
             prob_regular = torch.softmax(model(batch), dim=1)[:, 1].detach().cpu().numpy()
             probs.extend(float(p) for p in prob_regular)
 
     regular_probability = float(np.median(probs))
-    predicted_label = 1 if regular_probability >= 0.5 else 0
+    predicted_label = 1 if regular_probability >= threshold else 0
     confidence = regular_probability if predicted_label == 1 else 1.0 - regular_probability
 
     return {
@@ -170,7 +191,7 @@ def predict_ore_texture(
         "confidence": round(confidence * 100.0, 1),
         "regular_probability": round(regular_probability * 100.0, 1),
         "complex_probability": round((1.0 - regular_probability) * 100.0, 1),
-        "decision_threshold": 0.5,
+        "decision_threshold": threshold,
         "tile_count": len(tiles),
         "tile_probabilities": probs,
     }

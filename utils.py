@@ -1,11 +1,97 @@
 import cv2
 import numpy
 import os
+import torch
+import torch.nn as nn
+from torchvision.models import resnet18, ResNet18_Weights
+
+class ResNetUNet(nn.Module):
+    def __init__(self, freeze=True):
+        super(ResNetUNet, self).__init__()
+
+        base_model = resnet18(weights=ResNet18_Weights.DEFAULT)
+
+        self.left_conv0 = nn.Sequential(base_model.conv1, base_model.bn1, base_model.relu) # 64 канала
+        self.left_pool = base_model.maxpool
+        self.left_conv1 = base_model.layer1 # 64 канала
+        self.left_conv2 = base_model.layer2 # 128 каналов
+        self.left_conv3 = base_model.layer3 # 256 каналов
+        self.left_conv4 = base_model.layer4 # 512 каналов (bottleneck)
+
+        if freeze:
+            for param in [self.left_conv0, self.left_conv1, self.left_conv2, self.left_conv3, self.left_conv4]:
+                for p in param.parameters():
+                    p.requires_grad = False
+
+        self.right_conv1 = nn.Sequential(
+            nn.Conv2d(768, 256, (3, 3), padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 128, (3, 3), padding=1),
+            nn.ReLU(),
+        )
+        
+        self.right_conv2 = nn.Sequential(
+            nn.Conv2d(256, 128, (3, 3), padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, (3, 3), padding=1),
+            nn.ReLU()
+        )
+
+        self.right_conv3 = nn.Sequential(
+            nn.Conv2d(128, 64, (3, 3), padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, (3, 3), padding=1),
+            nn.ReLU()
+        )
+
+        self.right_conv4 = nn.Sequential(
+            nn.Conv2d(96, 32, (3, 3), padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 1, (3, 3), padding=1),
+            nn.Sigmoid()
+        )
+
+        self.up = nn.UpsamplingBilinear2d(scale_factor=2)
+        self.pool = nn.MaxPool2d(kernel_size=2)
+
+    def forward(self, x):
+        left0 = self.left_conv0(x) # (H/2 x W/2 x 64)
+        x = self.left_pool(left0) # (H/4 x W/4 x 64)
+        left1 = self.left_conv1(x) # (H/4 x W/4 x 64)
+        left2 = self.left_conv2(left1) # (H/8 x W/8 x 128)
+        left3 = self.left_conv3(left2) # (H/16 x W/16 x 256)
+        left4 = self.left_conv4(left3) # (H/32 x W/32 x 512)
+
+        up1 = self.up(left4) # (H/16 x W/16 x 512)
+        concat1 = torch.cat((up1, left3), 1) # (H/16 x W/16 x 768)
+        right1 = self.right_conv1(concat1) # (H/16 x W/16 x 128)
+
+        up2 = self.up(right1) # (H/8 x H/8 x 128)
+        concat2 = torch.cat((up2, left2), 1) # (H/8 x H/8 x 256)
+        right2 = self.right_conv2(concat2) # (H/8 x H/8 x 64)
+
+        up3 = self.up(right2) # (H/4 x H/4 x 64)
+        concat3 = torch.cat((up3, left1), 1) # (H/4 x H/4 x 128)
+        right3 = self.right_conv3(concat3) # (H/4 x H/4 x 32)
+
+        up4 = self.up(right3) # (H/2 x H/2 x 32)
+        concat4 = torch.cat((up4, left0), 1) # (H/2 x H/2 x 96)
+        right4 = self.right_conv4(concat4) # (H/2, W/2, 1)
+
+        output = self.up(right4) # (H x W x 1)
+        return output
 
 class PreProcessingMethods:
     def __init__(self):
         self.unet_model = None
         self.resnet_model = None
+
+    def is_grayscale_like(self, image_bgr):
+        """Определяет, является ли изображение фактически черно-белым."""
+        if image_bgr.ndim == 3:
+            ch_std = numpy.std(image_bgr.reshape(-1, 3).astype(numpy.float32), axis=0)
+            return bool(numpy.max(ch_std) < 8)
+        return True
 
     def normalize_for_inference(self, image_bgr):
         """
@@ -194,7 +280,7 @@ class PreProcessingMethods:
                 filled[labels == label_id] = 255
         return filled
 
-    def segment_talc_unet(self, image_bgr, model_path="models/test_unet.pth", device=None):
+    def segment_talc_unet(self, image_bgr, model_path="models/talc.pth", device=None):
         """
         Сегментирует тальк с использованием глубокой сети U-Net (ResNet18).
         Применяет тайлинг (нарезку) для работы с большими разрешениями и сшивает результат.
@@ -204,19 +290,28 @@ class PreProcessingMethods:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if self.unet_model is None:
-            try:
-                import segmentation_models_pytorch as smp
-            except ImportError:
-                raise ImportError("segmentation_models_pytorch не установлена. Запустите pip install segmentation-models-pytorch")
+            checkpoint = torch.load(model_path, map_location=device)
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                # Кастомная модель ResNetUNet
+                model = ResNetUNet(freeze=False)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                self.is_custom_unet = True
+            else:
+                # Стандартный smp.Unet
+                try:
+                    import segmentation_models_pytorch as smp
+                except ImportError:
+                    raise ImportError("segmentation_models_pytorch не установлена. Запустите pip install segmentation-models-pytorch")
 
-            # 1. Загрузка U-Net
-            model = smp.Unet(
-                encoder_name="resnet18",
-                encoder_weights=None,
-                in_channels=3,
-                classes=1
-            )
-            model.load_state_dict(torch.load(model_path, map_location=device))
+                model = smp.Unet(
+                    encoder_name="resnet18",
+                    encoder_weights=None,
+                    in_channels=3,
+                    classes=1
+                )
+                model.load_state_dict(checkpoint)
+                self.is_custom_unet = False
+
             model = model.to(device)
             model.eval()
             self.unet_model = model
@@ -225,14 +320,30 @@ class PreProcessingMethods:
 
         from preprocessing.tiling import slice_into_tiles, stitch_tiles
 
-        # 2. Нарезка на тайлы
-        # Используем порог 0.94 для уверенной детекции талька без шумов
-        unet_thresh = 0.94
+        # Применяем нормализацию к изображению перед инференсом:
+        # Для ч/б снимков берем оригинал (без CLAHE), для цветных - нормализованный вариант
+        is_grayscale = self.is_grayscale_like(image_bgr)
+        if is_grayscale:
+            image_input = self._ensure_color(image_bgr)
+        else:
+            image_input = self.normalize_for_inference(image_bgr)
 
-        tiles, coords = slice_into_tiles(image_bgr, tile_size=512, overlap=64)
+        # Устанавливаем порог адаптивно в зависимости от архитектуры модели:
+        if getattr(self, "is_custom_unet", False):
+            # Для кастомной модели ResNetUNet (model_boxed.pth) порог 0.5 идеален
+            unet_thresh = 0.5
+        else:
+            # Для стандартного smp.Unet (talc.pth) берем оригинальный высокий порог 0.94
+            unet_thresh = 0.94
+
+        tiles, coords = slice_into_tiles(image_input, tile_size=512, overlap=64)
 
         pred_tiles = []
         with torch.no_grad():
+            # Заранее создаем тензоры среднего и отклонения для ImageNet на GPU
+            mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+
             for tile in tiles:
                 # Переводим в RGB и ресайзим к 256x256 (на которых обучалась сеть)
                 tile_rgb = cv2.cvtColor(tile, cv2.COLOR_BGR2RGB)
@@ -242,9 +353,17 @@ class PreProcessingMethods:
                 tensor = torch.from_numpy(tile_resized.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
                 tensor = tensor.to(device)
                 
+                # Нормализуем по ImageNet
+                tensor = (tensor - mean) / std
+                
                 # Запуск инференса
                 logits = model(tensor)
-                probs = torch.sigmoid(logits).cpu().numpy()[0, 0] # [256, 256]
+                if getattr(self, "is_custom_unet", False):
+                    # У кастомной ResNetUNet сигмоида уже встроена на выходе
+                    probs = logits.cpu().numpy()[0, 0]
+                else:
+                    # У smp.Unet на выходе логиты
+                    probs = torch.sigmoid(logits).cpu().numpy()[0, 0] # [256, 256]
                 
                 # Порог бинаризации
                 pred_tile_resized = (probs > unet_thresh).astype(numpy.uint8) * 255
@@ -360,7 +479,7 @@ class PreProcessingMethods:
 
         return final_mask
 
-    def classify_ore_segments(self, filled_mask, image_enhanced_gray, brightness_threshold=120, talc_threshold=30, image_bgr=None, use_unet=True, model_path="models/test_unet.pth", device=None, use_resnet=True, resnet_model_path="models/ore_resnet18.pth"):
+    def classify_ore_segments(self, filled_mask, image_enhanced_gray, brightness_threshold=120, talc_threshold=30, image_bgr=None, use_unet=True, model_path="models/model_boxed.pth", device=None, use_resnet=True, resnet_model_path="models/ore_resnet18.pth"):
         """
         Разделяет изображение на 4 класса:
         - Класс 0 (Порода/Матрица)

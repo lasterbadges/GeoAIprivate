@@ -30,11 +30,22 @@ def slice_into_tiles(image: np.ndarray, tile_size=512, overlap=64):
     if len(x_starts) == 0 or x_starts[-1] + tile_size < w:
         x_starts.append(w - tile_size)
         
-    for y in y_starts:
-        for x in x_starts:
-            y_end = y + tile_size
-            x_end = x + tile_size
+    for y_orig in y_starts:
+        for x_orig in x_starts:
+            y = y_orig
+            x = x_orig
             
+            # Сдвигаем окно назад, если оно выходит за пределы изображения
+            y_end = y + tile_size
+            if y_end > h:
+                y_end = h
+                y = max(0, h - tile_size)
+                
+            x_end = x + tile_size
+            if x_end > w:
+                x_end = w
+                x = max(0, w - tile_size)
+                
             tile = image[y:y_end, x:x_end]
             tiles.append(tile)
             coords.append((y, y_end, x, x_end))
