@@ -558,7 +558,7 @@ class PreProcessingMethods:
 
         return final_mask
 
-    def slicer(self, image_path, output_dir):
+    def slicer(self, image_path, output_dir, tile_size=224):
         image = cv2.imread(image_path)
         output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
@@ -568,7 +568,6 @@ class PreProcessingMethods:
             return
 
         height, width, _ = image.shape
-        tile_size = 512
         count = 0
 
         y_cords = list(range(0, height, tile_size))
