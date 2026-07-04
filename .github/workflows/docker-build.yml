@@ -1,9 +1,8 @@
 name: Build and Push Docker Image
 
+# Отключаем триггер на обычный push, включаем ручной запуск
 on:
-  push:
-    branches:
-      - main  # Если ветка в Git называется master, замени на master
+  workflow_dispatch:
 
 jobs:
   build-and-push:
